@@ -7,11 +7,11 @@ class CGraph:
         self.inputs = dict()
         self.consumers = dict()
         self.operations = dict()
-        self.u_counter = 0
+        self.n_nodes = 0
 
     def new_var(self):
-        u = self.u_counter
-        self.u_counter += 1
+        u = self.n_nodes
+        self.n_nodes += 1
 
         self.inputs[u] = []
         self.consumers[u] = []
@@ -27,31 +27,74 @@ class CGraph:
 
         return y
 
-    def forward(self, xs):
-        f_graph = [None for _ in range(self.u_counter)]
-        for y in range(self.u_counter):
+    @staticmethod
+    def dict2graph(d, n_nodes):
+        graph = [None for _ in range(n_nodes)]
+        for k in d:
+            graph[k] = d[k]
+        return graph
+
+    def forward_full(self, xs):
+        f_graph = [None for _ in range(self.n_nodes)]
+        for y in range(self.n_nodes):
             op = self.operations.get(y)
             if op:
-                f, df = op
+                f, _ = op
                 x_values = [f_graph[x] for x in self.inputs[y]]
                 f_graph[y] = f(*x_values)
             else:
                 f_graph[y] = xs[y]
         return f_graph
 
-    def backward(self, f_graph):
-        b_graph = [None for _ in range(self.u_counter)]
+    def forward_partial(self, y, f_graph):
+        if f_graph[y] is not None:
+            return f_graph
+
+        x_values = []
+        for x in self.inputs[y]:
+            if f_graph[x] is None:
+                self.forward_partial(x, f_graph)
+            x_values.append(f_graph[x])
+
+        f, _ = self.operations.get(y)
+        y_value = f(*x_values)
+        f_graph[y] = y_value
+        return f_graph
+
+    def backward_full(self, f_graph):
+        b_graph = [None for _ in range(self.n_nodes)]
         b_graph[-1] = 1
-        for y in reversed(range(self.u_counter)):
+        for y in reversed(range(self.n_nodes)):
             xs = self.inputs.get(y)
             if xs:
                 _, df = self.operations.get(y)
                 x_values = [f_graph[x] for x in self.inputs[y]]
                 for j, x in enumerate(xs):
+                    g = df[j](b_graph[y], *x_values)
                     if b_graph[x] is None:
-                        b_graph[x] = df[j](b_graph[y], *x_values)
+                        b_graph[x] = g
                     else:
-                        b_graph[x] += df[j](b_graph[y], *x_values)
+                        b_graph[x] += g
+        return b_graph
+
+    def backward_partial(self, x, b_graph, f_graph):
+        if b_graph[x] is not None:
+            return b_graph
+
+        if x == self.n_nodes - 1:
+            b_graph[x] = 1
+            return b_graph
+
+        for y in self.consumers[x]:
+            if b_graph[y] is None:
+                self.backward_partial(y, b_graph, f_graph)
+            _, df = self.operations.get(y)
+            x_values = [f_graph[x] for x in self.inputs[y]]
+            g = df[self.inputs[y].index(x)](b_graph[y], *x_values)
+            if b_graph[x] is None:
+                b_graph[x] = g
+            else:
+                b_graph[x] += g
         return b_graph
 
 
@@ -79,15 +122,18 @@ y3 = cg1.apply(
     ),
     y1, y2)  # y3 = ln(y1) + 1/y2 = 2*ln(x) + exp(-x^2)
 
-print(x1)
-print(y3)
-print(cg1.inputs)
-print(cg1.consumers)
-print(cg1.operations)
-print(cg1.u_counter)
-fg1 = cg1.forward({x1: 1})
-print(fg1)
-print(cg1.backward(fg1))
+print(f'idx(x1)={x1}')
+print(f'idx(y3)={y3}')
+print(f'cg1.inputs={cg1.inputs}')
+print(f'cg1.consumers={cg1.consumers}')
+print(f'cg1.operations={cg1.operations}')
+print(f'cg1.u_counter={cg1.n_nodes}')
+fg1_full = cg1.forward_full({x1: 1})
+fg1_partial = cg1.forward_partial(x1, CGraph.dict2graph({x1: 1}, cg1.n_nodes))
+print(f'fg1_full={fg1_full}')
+print(f'fg1_partial={fg1_partial}')
+print(f'cg1.backward_full(fg1)={cg1.backward_full(fg1_full)}')
+print(f'cg1.backward_partial(fg1)={cg1.backward_partial(y2, CGraph.dict2graph({}, cg1.n_nodes), fg1_full)}')
 
 cg2 = CGraph()
 w1 = cg2.new_var()
@@ -110,18 +156,92 @@ z1 = cg2.apply(
     ),
     y1
 )
-fg2 = cg2.forward(
-    {
-        w1: np.random.rand(5),
-        b1: 1
-    }
+p1 = {
+    w1: np.random.rand(5),
+    b1: 1
+}
+fg2_full = cg2.forward_full(p1)
+
+fg2_partial = cg2.forward_partial(
+    y1,
+    CGraph.dict2graph(p1, cg2.n_nodes)
 )
+print(f'fg2_full={fg2_full}')
+print(f'fg2_partial={fg2_partial}')
 
-y1_ = np.matmul(X1, fg2[w1]) + fg2[b1]
-print(fg2[y1] - y1_)
+y1_ = np.matmul(X1, fg2_full[w1]) + fg2_full[b1]
+print(fg2_full[y1] - y1_)
 z1_ = np.dot(y1_, y1_)
-print(fg2[z1] - z1_)
+print(fg2_full[z1] - z1_)
 
-bg2 = cg2.backward(fg2)
-print(fg2[y1])
-print(bg2[y1])
+bg2_full = cg2.backward_full(fg2_full)
+print(fg2_full[y1])
+print(bg2_full[y1])
+
+bg2_partial = cg2.backward_partial(z1, CGraph.dict2graph({}, cg2.n_nodes), fg2_full)
+print(bg2_full[z1] - bg2_partial[z1])
+
+cg3 = CGraph()
+w1 = cg3.new_var()
+b1 = cg3.new_var()
+w2 = cg3.new_var()
+b2 = cg3.new_var()
+X1 = np.identity(5)
+z1 = cg3.apply(
+    (
+        lambda w, b: np.matmul(X1, w) + b,
+        [
+            lambda dz, w, b: np.matmul(X1.T, dz),
+            lambda dz, w, b: np.matmul(dz.T, np.ones(dz.shape[0]))
+        ]
+    ),
+    w1, b1
+)
+a1 = cg3.apply(
+    (
+        lambda z: np.maximum(0, z),
+        [lambda da, z: da * (z > 0)]
+    ),
+    z1
+)
+z2 = cg3.apply(
+    (
+        lambda w, b, a: np.matmul(a, w) + b,
+        [
+            lambda dz, w, b, a: np.matmul(a.T, dz),  # (m*3)^T * m*1 = 3*1
+            lambda dz, w, b, a: np.matmul(dz.T, np.ones(dz.shape[0])),
+            lambda dz, w, b, a: np.matmul(dz, w.T)  # m*1 * (3*1)^T= m*3
+        ]
+    ),
+    w2, b2, a1
+)
+a2 = cg3.apply(
+    (
+        lambda z: np.maximum(0, z),
+        [lambda da, z: da * (z > 0)]
+    ),
+    z2
+)
+loss = cg3.apply(
+    (
+        lambda a: np.matmul(a.T, a),
+        [lambda dloss, a: dloss * 2 * a]
+    ),
+    a2
+)
+p1 = {
+    w1: np.random.rand(5, 3),
+    b1: np.random.rand(1, 3),
+    w2: np.random.rand(3, 1),
+    b2: np.random.rand(1, 1)
+}
+fg3_full = cg3.forward_full(p1)
+var = a1
+fg3_partial = cg3.forward_partial(var, CGraph.dict2graph(p1, cg3.n_nodes))
+bg3_full = cg3.backward_full(fg3_full)
+bg3_partial = cg3.backward_partial(var, CGraph.dict2graph({}, cg3.n_nodes), fg3_full)
+print(f'idx(var)={var}')
+print(f'fg3_full[var]={fg3_full[var]}')
+print(f'fg3_partial[var]={fg3_partial[var]}')
+print(f'bg3_full[var]={bg3_full[var]}')
+print(f'bg3_partial[var]={bg3_partial[var]}')
