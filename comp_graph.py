@@ -264,6 +264,48 @@ def init_rand_param(w_vars, b_vars, ns, a0_var, x_val, w_mult=0.01, b_mult=1):
     return parameters
 
 
+def matmul_f(w, b, a):
+    return np.matmul(a, w) + b
+
+
+def matmul_dw(dz, w, b, a):
+    return np.matmul(a.T, dz)
+
+
+def matmul_db(dz, w, b, a):
+    return np.matmul(np.ones((1, dz.shape[0])), dz)
+
+
+def matmul_da(dz, w, b, a):
+    return np.matmul(dz, w.T)
+
+
+op_matmul = matmul_f, (matmul_dw, matmul_db, matmul_da)
+
+
+def relu_f(z):
+    return np.maximum(0, z)
+
+
+def relu_dz(da, z):
+    return da * (z > 0)
+
+
+op_relu = relu_f, (relu_dz,)
+
+
+def op_mse(y_val):
+    m = y_val.shape[0]
+
+    def mse_f(y_approx):
+        return np.sum((y_approx - y_val) ** 2) / m
+
+    def mse_dy_approx(de, y_approx):
+        return de * 2 * (y_approx - y_val) / m
+
+    return mse_f, (mse_dy_approx,)
+
+
 def gen_comp_graph(x_val, y_val, layer_dims):
     cg = CGraph()
     w_vars = {}
@@ -272,49 +314,20 @@ def gen_comp_graph(x_val, y_val, layer_dims):
     a_vars = {}
 
     a_vars[0] = cg.new_var()
-    m = x_val.shape[0]
     ns = [x_val.shape[1]] + layer_dims
 
     for i in range(1, len(ns)):
         w_vars[i] = cg.new_var()
         b_vars[i] = cg.new_var()
-        z_vars[i] = cg.apply(
-            (
-                lambda w, b, a_prev: np.matmul(a_prev, w) + b,
-                [
-                    lambda dz, w, b, a_prev: np.matmul(a_prev.T, dz),  # m*n_{i-1}^T * m*n_i = n_{i-1}*n_i
-                    lambda dz, w, b, a_prev: np.matmul(np.ones((1, m)), dz),  # 1*m * m*n_i = 1*n_i
-                    lambda dz, w, b, a_prev: np.matmul(dz, w.T)  # m*n_i * (n_{i-1}*n_i)^T= m*n_{i-1}
-                ]
-            ),
-            w_vars[i], b_vars[i], a_vars[i - 1]
-        )
-        a_vars[i] = cg.apply(
-            (
-                lambda z: np.maximum(0, z),
-                [lambda da, z: da * (z > 0)]
-            ),
-            z_vars[i]
-        )
-    y_approx = cg.apply(
-        (
-            lambda a: a,
-            [lambda dy, a: dy]
-        ),
-        a_vars[len(ns) - 1]
-    )
-    loss = cg.apply(
-        (
-            lambda y_approx: np.sum((y_approx - y_val) ** 2) / m,
-            [lambda dl, y_approx: dl * 2 * (y_approx - y_val) / m]
-        ),
-        y_approx
-    )
+        z_vars[i] = cg.apply(op_matmul, w_vars[i], b_vars[i], a_vars[i - 1])
+        a_vars[i] = cg.apply(op_relu, z_vars[i])
+
+    loss = cg.apply(op_mse(y_val), a_vars[len(ns) - 1])
 
     return cg, w_vars, b_vars, z_vars, a_vars, ns
 
 
-def test_fit(x_val, y_val, layer_dims, learning_rate=0.00005, n_epoch=100000):  # x: (m, n)
+def test_fit(x_val, y_val, layer_dims, learning_rate=0.001, n_epoch=10000):  # x: (m, n)
     cg, w_vars, b_vars, z_vars, a_vars, ns = gen_comp_graph(x_val, y_val, layer_dims)
 
     parameters = init_rand_param(w_vars, b_vars, ns, a_vars[0], x_val)
@@ -343,9 +356,9 @@ if __name__ == '__main__':
     # test1()
     # test2()
     # test3()
-    x = 10 * np.random.rand(1000, 1)
-    y = x ** 2
-    f_approx = test_fit(x, y, [3, 3, 1])
+    x = 5 * np.random.rand(100, 2)
+    y = np.sum(x * x, axis=1, keepdims=True)
+    f_approx = test_fit(x, y, [5, 5, 1])
     np.set_printoptions(precision=2)
     np.set_printoptions(suppress=True)
-    print(f'check: {np.concatenate((x, y, f_approx(x),f_approx(x) - y), axis=1)[:100]}')
+    print(f'check: {np.concatenate((x, y, f_approx(x), f_approx(x) - y), axis=1)[:100]}')
