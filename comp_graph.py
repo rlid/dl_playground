@@ -324,16 +324,17 @@ def gen_comp_graph(x_val, y_val, layer_dims):
 
     loss = cg.apply(op_mse(y_val), a_vars[len(ns) - 1])
 
-    return cg, w_vars, b_vars, z_vars, a_vars, ns
+    return cg, loss, w_vars, b_vars, z_vars, a_vars, ns
 
 
 def test_fit(x_val, y_val, layer_dims, learning_rate=0.001, n_epoch=10000):  # x: (m, n)
-    cg, w_vars, b_vars, z_vars, a_vars, ns = gen_comp_graph(x_val, y_val, layer_dims)
+    cg, loss, w_vars, b_vars, z_vars, a_vars, ns = gen_comp_graph(x_val, y_val, layer_dims)
 
     parameters = init_rand_param(w_vars, b_vars, ns, a_vars[0], x_val)
     for i in range(n_epoch):
         fg = cg.forward_full(parameters)
-        print(fg[-1])
+        if (i+1) % 100 == 0:
+            print(f'mse[{i+1}] = {fg[-1]}')
         bg = cg.backward_full(fg)
         for p in parameters:
             if p != a_vars[0]:
@@ -347,9 +348,12 @@ def test_fit(x_val, y_val, layer_dims, learning_rate=0.001, n_epoch=10000):  # x
 
     def f_approx(x):
         parameters[a_vars[0]] = x
-        return cg.forward_full(parameters)[-2]
+        forward_graph = cg.forward_full(parameters)
+        return forward_graph, cg.backward_full(bg)
 
-    return f_approx
+    print(f'w_vars={w_vars}')
+
+    return f_approx, loss, w_vars, b_vars, z_vars, a_vars
 
 
 if __name__ == '__main__':
@@ -358,7 +362,11 @@ if __name__ == '__main__':
     # test3()
     x = 5 * np.random.rand(100, 2)
     y = np.sum(x * x, axis=1, keepdims=True)
-    f_approx = test_fit(x, y, [5, 5, 1])
+    f_approx, loss, w_vars, b_vars, z_vars, a_vars = test_fit(x, y, [5, 5, 1])
     np.set_printoptions(precision=2)
     np.set_printoptions(suppress=True)
-    print(f'check: {np.concatenate((x, y, f_approx(x), f_approx(x) - y), axis=1)[:100]}')
+    fg, bg = f_approx(x)
+    print(f'check: {np.concatenate((x, y, fg[-2], fg[-2] - y), axis=1)[:10]}')
+    i = 2
+    print(f'w{i} = {fg[w_vars[i]]}')
+    print(f'dw{i} = {bg[w_vars[i]]}')
