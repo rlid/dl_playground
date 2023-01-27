@@ -306,7 +306,7 @@ def op_mse(y_val):
     return mse_f, (mse_dy_approx,)
 
 
-def gen_comp_graph(x_val, y_val, layer_dims):
+def generate_fcn(layer_dims_inc_input, op_cost):
     cg = CGraph()
     w_vars = {}
     b_vars = {}
@@ -314,27 +314,46 @@ def gen_comp_graph(x_val, y_val, layer_dims):
     a_vars = {}
 
     a_vars[0] = cg.new_var()
-    ns = [x_val.shape[1]] + layer_dims
 
-    for i in range(1, len(ns)):
+    for i in range(1, len(layer_dims_inc_input)):
         w_vars[i] = cg.new_var()
         b_vars[i] = cg.new_var()
         z_vars[i] = cg.apply(op_matmul, w_vars[i], b_vars[i], a_vars[i - 1])
         a_vars[i] = cg.apply(op_relu, z_vars[i])
 
-    loss = cg.apply(op_mse(y_val), a_vars[len(ns) - 1])
+    loss = cg.apply(op_cost, a_vars[len(layer_dims_inc_input) - 1])
 
-    return cg, loss, w_vars, b_vars, z_vars, a_vars, ns
+    return cg, loss, w_vars, b_vars, z_vars, a_vars
+
+
+def generate_fcn_dropout(layer_dims_inc_input, op_cost):
+    cg = CGraph()
+    w_vars = {}
+    b_vars = {}
+    z_vars = {}
+    a_vars = {}
+
+    a_vars[0] = cg.new_var()
+
+    for i in range(1, len(layer_dims_inc_input)):
+        w_vars[i] = cg.new_var()
+        b_vars[i] = cg.new_var()
+        z_vars[i] = cg.apply(op_matmul, w_vars[i], b_vars[i], a_vars[i - 1])
+        a_vars[i] = cg.apply(op_relu, z_vars[i])
+
+    loss = cg.apply(op_cost, a_vars[len(layer_dims_inc_input) - 1])
+
+    return cg, loss, w_vars, b_vars, z_vars, a_vars
 
 
 def test_fit(x_val, y_val, layer_dims, learning_rate=0.001, n_epoch=10000):  # x: (m, n)
-    cg, loss, w_vars, b_vars, z_vars, a_vars, ns = gen_comp_graph(x_val, y_val, layer_dims)
-
-    parameters = init_rand_param(w_vars, b_vars, ns, a_vars[0], x_val)
+    layer_dims_inc_input = [x_val.shape[1]] + layer_dims
+    cg, loss, w_vars, b_vars, z_vars, a_vars = generate_fcn(layer_dims_inc_input, op_mse(y_val))
+    parameters = init_rand_param(w_vars, b_vars, layer_dims_inc_input, a_vars[0], x_val)
     for i in range(n_epoch):
         fg = cg.forward_full(parameters)
-        if (i+1) % 100 == 0:
-            print(f'mse[{i+1}] = {fg[-1]}')
+        if (i + 1) % 100 == 0:
+            print(f'mse[{i + 1}] = {fg[-1]}')
         bg = cg.backward_full(fg)
         for p in parameters:
             if p != a_vars[0]:
