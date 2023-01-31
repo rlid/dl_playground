@@ -1,11 +1,9 @@
-import math
-
 import numpy as np
 
 from op_lib import op_mse, op_relu, op_matmul
 
 
-class CompGraph:
+class CompGraphDropout:
     def __init__(self):
         self.inputs = dict()
         self.consumers = dict()
@@ -101,162 +99,6 @@ class CompGraph:
         return b_graph
 
 
-def test1():
-    cg1 = CompGraph()
-    x1 = cg1.new_var()
-    y1 = cg1.apply(
-        (
-            lambda x: x ** 2,
-            [lambda dy, x: dy * 2 * x]
-        ),
-        x1)  # y1 = x^2, dy3/dy1 =
-    y2 = cg1.apply(
-        (
-            lambda x: math.exp(x),
-            [lambda dy, x: dy * math.exp(x)]
-        ),
-        y1)  # y2 = exp(y1), dy3/dy2 = -1/y2^2
-    y3 = cg1.apply(
-        (
-            lambda x, y: math.log(x) + 1 / y,
-            [
-                lambda dy, x, y: dy * (1 / x),
-                lambda dy, x, y: dy * (- 1 / (y * y))
-            ]
-        ),
-        y1, y2)  # y3 = ln(y1) + 1/y2 = 2*ln(x) + exp(-x^2)
-
-    print(f'idx(x1)={x1}')
-    print(f'idx(y3)={y3}')
-    print(f'cg1.inputs={cg1.inputs}')
-    print(f'cg1.consumers={cg1.consumers}')
-    print(f'cg1.operations={cg1.operations}')
-    print(f'cg1.u_counter={cg1.n_nodes}')
-    fg1_full = cg1.forward_full({x1: 1})
-    fg1_partial = cg1.forward_partial(x1, CompGraph.dict2graph({x1: 1}, cg1.n_nodes))
-    print(f'fg1_full={fg1_full}')
-    print(f'fg1_partial={fg1_partial}')
-    print(f'cg1.backward_full(fg1)={cg1.backward_full(fg1_full)}')
-    print(f'cg1.backward_partial(fg1)={cg1.backward_partial(y2, CompGraph.dict2graph({}, cg1.n_nodes), fg1_full)}')
-
-
-def test2():
-    cg2 = CompGraph()
-    w1 = cg2.new_var()
-    b1 = cg2.new_var()
-    X1 = np.identity(5)
-    y1 = cg2.apply(
-        (
-            lambda w, b: np.matmul(X1, w) + b,
-            [
-                lambda dy, w, b: np.matmul(X1.T, dy),
-                lambda dy, w, b: np.matmul(dy.T, np.ones(dy.shape[0]))
-            ]
-        ),
-        w1, b1
-    )
-    z1 = cg2.apply(
-        (
-            lambda x: np.dot(x, x),
-            [lambda dy, x: dy * 2 * x]
-        ),
-        y1
-    )
-    p1 = {
-        w1: np.random.rand(5),
-        b1: 1
-    }
-    fg2_full = cg2.forward_full(p1)
-
-    fg2_partial = cg2.forward_partial(
-        y1,
-        CompGraph.dict2graph(p1, cg2.n_nodes)
-    )
-    print(f'fg2_full={fg2_full}')
-    print(f'fg2_partial={fg2_partial}')
-
-    y1_ = np.matmul(X1, fg2_full[w1]) + fg2_full[b1]
-    print(fg2_full[y1] - y1_)
-    z1_ = np.dot(y1_, y1_)
-    print(fg2_full[z1] - z1_)
-
-    bg2_full = cg2.backward_full(fg2_full)
-    print(fg2_full[y1])
-    print(bg2_full[y1])
-
-    bg2_partial = cg2.backward_partial(z1, CompGraph.dict2graph({}, cg2.n_nodes), fg2_full)
-    print(bg2_full[z1] - bg2_partial[z1])
-
-
-def test3():
-    cg3 = CompGraph()
-    w1 = cg3.new_var()
-    b1 = cg3.new_var()
-    w2 = cg3.new_var()
-    b2 = cg3.new_var()
-    X1 = np.identity(5)
-
-    m = X1.shape[0]
-    z1 = cg3.apply(
-        (
-            lambda w, b: np.matmul(X1, w) + b,
-            [
-                lambda dz, w, b: np.matmul(X1.T, dz),
-                lambda dz, w, b: np.matmul(np.ones((1, m)), dz)
-            ]
-        ),
-        w1, b1
-    )
-    a1 = cg3.apply(
-        (
-            lambda z: np.maximum(0, z),
-            [lambda da, z: da * (z > 0)]
-        ),
-        z1
-    )
-    z2 = cg3.apply(
-        (
-            lambda w, b, a: np.matmul(a, w) + b,
-            [
-                lambda dz, w, b, a: np.matmul(a.T, dz),  # (m*3)^T * m*1 = 3*1
-                lambda dz, w, b, a: np.matmul(np.ones((1, m)), dz),
-                lambda dz, w, b, a: np.matmul(dz, w.T)  # m*1 * (3*1)^T= m*3
-            ]
-        ),
-        w2, b2, a1
-    )
-    a2 = cg3.apply(
-        (
-            lambda z: np.maximum(0, z),
-            [lambda da, z: da * (z > 0)]
-        ),
-        z2
-    )
-    loss = cg3.apply(
-        (
-            lambda a: np.matmul(a.T, a),
-            [lambda dloss, a: dloss * 2 * a]
-        ),
-        a2
-    )
-    p1 = {
-        w1: np.random.rand(5, 3),
-        b1: np.random.rand(1, 3),
-        w2: np.random.rand(3, 1),
-        b2: np.random.rand(1, 1)
-    }
-    fg3_full = cg3.forward_full(p1)
-    var = loss
-    fg3_partial = cg3.forward_partial(var, CompGraph.dict2graph(p1, cg3.n_nodes))
-    bg3_full = cg3.backward_full(fg3_full)
-    bg3_partial = cg3.backward_partial(var, CompGraph.dict2graph({}, cg3.n_nodes), fg3_full)
-    print(f'idx(var)={var}')
-    print(f'fg3_full[var]={fg3_full[var]}')
-    print(f'fg3_partial[var]={fg3_partial[var]}')
-    print(f'bg3_full[var]={bg3_full[var]}')
-    print(f'bg3_partial[var]={bg3_partial[var]}')
-
-
 def init_rand_param(w_vars, b_vars, ns, a0_var, x_val, w_mult=0.01, b_mult=1):
     parameters = {a0_var: x_val}
     for i in range(1, len(ns)):
@@ -265,8 +107,8 @@ def init_rand_param(w_vars, b_vars, ns, a0_var, x_val, w_mult=0.01, b_mult=1):
     return parameters
 
 
-def generate_fcn(layer_dims_inc_input, op_cost):
-    cg = CompGraph()
+def generate_fcn_dropout(layer_dims_inc_input, op_cost):
+    cg = CompGraphDropout()
     w_vars = {}
     b_vars = {}
     z_vars = {}
@@ -285,9 +127,9 @@ def generate_fcn(layer_dims_inc_input, op_cost):
     return cg, loss, w_vars, b_vars, z_vars, a_vars
 
 
-def test_fit(x_val, y_val, layer_dims, learning_rate=0.001, n_epoch=10000):  # x: (m, n)
+def test_fit_dropout(x_val, y_val, layer_dims, learning_rate=0.001, n_epoch=10000):  # x: (m, n)
     layer_dims_inc_input = [x_val.shape[1]] + layer_dims
-    cg, loss, w_vars, b_vars, z_vars, a_vars = generate_fcn(layer_dims_inc_input, op_mse(y_val))
+    cg, loss, w_vars, b_vars, z_vars, a_vars = generate_fcn_dropout(layer_dims_inc_input, op_mse(y_val))
     parameters = init_rand_param(w_vars, b_vars, layer_dims_inc_input, a_vars[0], x_val)
     for i in range(n_epoch):
         fg = cg.forward_full(parameters)
@@ -320,7 +162,7 @@ if __name__ == '__main__':
     # test3()
     x = 5 * np.random.rand(100, 2)
     y = np.sum(x * x, axis=1, keepdims=True)
-    f_approx, loss, w_vars, b_vars, z_vars, a_vars = test_fit(x, y, [5, 5, 1])
+    f_approx, loss, w_vars, b_vars, z_vars, a_vars = test_fit_dropout(x, y, [5, 5, 1])
     np.set_printoptions(precision=2)
     np.set_printoptions(suppress=True)
     fg, bg = f_approx(x)
