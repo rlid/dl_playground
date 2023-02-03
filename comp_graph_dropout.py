@@ -5,17 +5,22 @@ from op_lib import op_mse, op_relu, op_matmul
 
 class CompGraphDropout:
     def __init__(self):
-        self.inputs = dict()
-        self.consumers = dict()
-        self.operations = dict()
         self.n_nodes = 0
+        self.inputs = []
+        self.consumers = []
+        self.operations = []
+        self.drop_probs = []
+        self.masks = []
 
-    def new_var(self):
+    def new_var(self, drop_prob=0):
         u = self.n_nodes
         self.n_nodes += 1
 
-        self.inputs[u] = []
-        self.consumers[u] = []
+        self.inputs.append([])
+        self.consumers.append([])
+        self.operations.append(None)
+        self.drop_probs.append(drop_prob)
+        self.masks.append(1)
         return u
 
     def apply(self, op, *xs):
@@ -38,10 +43,14 @@ class CompGraphDropout:
     def forward_full(self, xs):
         f_graph = [None for _ in range(self.n_nodes)]
         for y in range(self.n_nodes):
-            op = self.operations.get(y)
+            op = self.operations[y]
             if op:
                 f, _ = op
-                x_values = [f_graph[x] for x in self.inputs[y]]
+                x_values = []
+                for x in self.inputs[y]:
+                    if self.drop_probs[x] > 0:
+                        self.masks[x] = np.random.uniform(size=f_graph[x].shape) > self.drop_probs[x]
+                    x_values.append(f_graph[x] * self.masks[x])
                 f_graph[y] = f(*x_values)
             else:
                 f_graph[y] = xs[y]
@@ -57,7 +66,7 @@ class CompGraphDropout:
                 self.forward_partial(x, f_graph)
             x_values.append(f_graph[x])
 
-        f, _ = self.operations.get(y)
+        f, _ = self.operations[y]
         y_value = f(*x_values)
         f_graph[y] = y_value
         return f_graph
@@ -66,9 +75,9 @@ class CompGraphDropout:
         b_graph = [None for _ in range(self.n_nodes)]
         b_graph[-1] = 1
         for y in reversed(range(self.n_nodes)):
-            xs = self.inputs.get(y)
+            xs = self.inputs[y]
             if xs:
-                _, df = self.operations.get(y)
+                _, df = self.operations[y]
                 x_values = [f_graph[x] for x in self.inputs[y]]
                 for j, x in enumerate(xs):
                     g = df[j](b_graph[y], *x_values)
@@ -89,7 +98,7 @@ class CompGraphDropout:
         for y in self.consumers[x]:
             if b_graph[y] is None:
                 self.backward_partial(y, b_graph, f_graph)
-            _, df = self.operations.get(y)
+            _, df = self.operations[y]
             x_values = [f_graph[x] for x in self.inputs[y]]
             g = df[self.inputs[y].index(x)](b_graph[y], *x_values)
             if b_graph[x] is None:
