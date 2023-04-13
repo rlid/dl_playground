@@ -7,17 +7,18 @@ from op_lib import op_mse, op_relu, op_matmul
 
 class CompGraph:
     def __init__(self):
-        self.inputs = dict()
-        self.consumers = dict()
-        self.operations = dict()
         self.n_nodes = 0
+        self.inputs = []
+        self.consumers = []
+        self.operations = []
 
     def new_var(self):
         u = self.n_nodes
         self.n_nodes += 1
 
-        self.inputs[u] = []
-        self.consumers[u] = []
+        self.inputs.append([])
+        self.consumers.append([])
+        self.operations.append(None)
         return u
 
     def apply(self, op, *xs):
@@ -40,7 +41,7 @@ class CompGraph:
     def forward_full(self, xs):
         f_graph = [None for _ in range(self.n_nodes)]
         for y in range(self.n_nodes):
-            op = self.operations.get(y)
+            op = self.operations[y]
             if op:
                 f, _ = op
                 x_values = [f_graph[x] for x in self.inputs[y]]
@@ -59,7 +60,7 @@ class CompGraph:
                 self.forward_partial(x, f_graph)
             x_values.append(f_graph[x])
 
-        f, _ = self.operations.get(y)
+        f, _ = self.operations[y]
         y_value = f(*x_values)
         f_graph[y] = y_value
         return f_graph
@@ -68,9 +69,9 @@ class CompGraph:
         b_graph = [None for _ in range(self.n_nodes)]
         b_graph[-1] = 1
         for y in reversed(range(self.n_nodes)):
-            xs = self.inputs.get(y)
+            xs = self.inputs[y]
             if xs:
-                _, df = self.operations.get(y)
+                _, df = self.operations[y]
                 x_values = [f_graph[x] for x in self.inputs[y]]
                 for j, x in enumerate(xs):
                     g = df[j](b_graph[y], *x_values)
@@ -91,7 +92,7 @@ class CompGraph:
         for y in self.consumers[x]:
             if b_graph[y] is None:
                 self.backward_partial(y, b_graph, f_graph)
-            _, df = self.operations.get(y)
+            _, df = self.operations[y]
             x_values = [f_graph[x] for x in self.inputs[y]]
             g = df[self.inputs[y].index(x)](b_graph[y], *x_values)
             if b_graph[x] is None:
